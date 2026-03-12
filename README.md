@@ -211,12 +211,12 @@ flowchart LR
     C5 -->|"No"| Q5["🚫 Quarantine:<br/>invalid_event_ts"]
     C5 -->|"Yes"| PASS["✅ Pass → Clean + Normalize"]
 
-    style Q1 fill:#FFCDD2,stroke:#f44336
-    style Q2 fill:#FFCDD2,stroke:#f44336
-    style Q3 fill:#FFCDD2,stroke:#f44336
-    style Q4 fill:#FFCDD2,stroke:#f44336
-    style Q5 fill:#FFCDD2,stroke:#f44336
-    style PASS fill:#C8E6C9,stroke:#4CAF50
+    style Q1 fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style Q2 fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style Q3 fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style Q4 fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style Q5 fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style PASS fill:#2E7D32,stroke:#1B5E20,color:#fff
 ```
 
 ---
