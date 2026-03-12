@@ -188,8 +188,8 @@ flowchart TD
     style GOLD_LAYER fill:#FFFDE7,stroke:#FFD700,stroke-width:2px
     style QUARANTINE fill:#D32F2F,stroke:#B71C1C,color:#fff
     style CORRUPT fill:#D32F2F,stroke:#B71C1C,color:#fff
-    style WRITE_Q fill:#FFCDD2
-    style WRITE_C fill:#FFCDD2
+    style WRITE_Q fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style WRITE_C fill:#D32F2F,stroke:#B71C1C,color:#fff
     style CLEAN_STEPS fill:#E8F5E9,stroke:#4CAF50
     style DERIVE fill:#E3F2FD,stroke:#2196F3
     style METRICS fill:#FFF9C4,stroke:#FFC107
