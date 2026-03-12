@@ -9,8 +9,5 @@ wheels/
 # Virtual environments
 .venv
 
-# Pipeline output
-output/
-
 # Pytest cache
 .pytest_cache/
