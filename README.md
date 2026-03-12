@@ -47,6 +47,180 @@ distribute/
 
 ---
 
+## Architecture / Data Flow Diagram
+
+### High-Level System Architecture
+
+```mermaid
+graph TB
+    subgraph "Data Sources"
+        RAW["📄 JSONL Event Files<br/><i>data/raw/events/*.jsonl</i>"]
+        REF["📋 User Reference Data<br/><i>data/reference/users.csv</i>"]
+    end
+
+    subgraph "Configuration"
+        CFG["⚙️ pipeline.yaml<br/><i>config/pipeline.yaml</i>"]
+    end
+
+    subgraph "Pipeline Orchestration"
+        ORCH["🔧 pipeline.py<br/><i>Entry point & SparkSession</i>"]
+        SCH["📐 schemas.py<br/><i>RAW_EVENT_SCHEMA<br/>VALID_EVENT_TYPES</i>"]
+    end
+
+    subgraph "Medallion Architecture"
+        direction TB
+        BRONZE["🥉 Bronze Layer<br/><i>bronze.py</i><br/>Ingest → Validate → Clean"]
+        SILVER["🥈 Silver Layer<br/><i>silver.py</i><br/>Enrich → Derive Fields"]
+        GOLD["🥇 Gold Layer<br/><i>gold.py</i><br/>Aggregate Metrics"]
+    end
+
+    subgraph "Output Storage (Parquet)"
+        B_OUT["bronze/events/<br/><i>Clean events</i>"]
+        B_Q["bronze/quarantined/<br/><i>Rejected records</i>"]
+        B_C["bronze/corrupt/<br/><i>Malformed JSON</i>"]
+        S_OUT["silver/events/<br/><i>Enriched events</i>"]
+        G_OUT["gold/daily_country_metrics/<br/><i>Aggregated metrics</i>"]
+    end
+
+    subgraph "Testing"
+        TEST["🧪 pytest Suite (28 tests)<br/>Unit + E2E Integration"]
+    end
+
+    CFG -->|"paths config"| ORCH
+    ORCH -->|"orchestrates"| BRONZE
+    ORCH -->|"orchestrates"| SILVER
+    ORCH -->|"orchestrates"| GOLD
+    SCH -->|"schema & constants"| BRONZE
+
+    RAW -->|"raw JSONL"| BRONZE
+    REF -->|"user CSV"| SILVER
+
+    BRONZE --> B_OUT
+    BRONZE --> B_Q
+    BRONZE --> B_C
+    B_OUT -->|"clean events"| SILVER
+    SILVER --> S_OUT
+    S_OUT -->|"enriched events"| GOLD
+    GOLD --> G_OUT
+
+    TEST -.->|"validates"| BRONZE
+    TEST -.->|"validates"| SILVER
+    TEST -.->|"validates"| GOLD
+
+    style BRONZE fill:#CD7F32,color:#fff
+    style SILVER fill:#C0C0C0,color:#000
+    style GOLD fill:#FFD700,color:#000
+    style B_Q fill:#ff6b6b,color:#fff
+    style B_C fill:#ff6b6b,color:#fff
+```
+
+### Detailed Data Flow
+
+```mermaid
+flowchart TD
+    START(["🚀 python -m job.pipeline --config config/pipeline.yaml"])
+    START --> LOAD_CFG["Load pipeline.yaml"]
+    LOAD_CFG --> SPARK["Create SparkSession<br/><i>local[*] mode<br/>dynamic partition overwrite</i>"]
+
+    SPARK --> BRONZE_START
+
+    subgraph BRONZE_LAYER ["🥉 BRONZE LAYER — bronze.py"]
+        BRONZE_START["ingest_events()"] --> READ_JSON["Read JSONL with explicit schema<br/><i>PERMISSIVE mode + _corrupt_record</i>"]
+        READ_JSON --> SPLIT["split_valid_corrupt()"]
+
+        SPLIT -->|"_corrupt_record IS NOT NULL"| CORRUPT[("💀 Corrupt Records<br/><i>Malformed JSON rows</i>")]
+        SPLIT -->|"_corrupt_record IS NULL"| VALIDATE["validate_and_clean()"]
+
+        VALIDATE --> RULES{"Apply Data Quality Rules"}
+        RULES -->|"❌ Fails validation"| QUARANTINE[("⚠️ Quarantined Records")]
+        RULES -->|"✅ Passes validation"| CLEAN_STEPS
+
+        subgraph CLEAN_STEPS ["Cleaning & Normalization"]
+            DEDUP["Deduplicate by event_id"]
+            NORM["Normalize event_type → UPPERCASE"]
+            CAST["Cast value → Double (default 0.0)"]
+            PARSE_TS["Parse event_ts → Timestamp"]
+            ADD_DATE["Add event_date partition column"]
+            DEDUP --> NORM --> CAST --> PARSE_TS --> ADD_DATE
+        end
+    end
+
+    QUARANTINE --> WRITE_Q["Write → bronze/quarantined/<br/><i>Parquet, overwrite</i>"]
+    CORRUPT --> WRITE_C["Write → bronze/corrupt/<br/><i>Parquet, overwrite</i>"]
+    ADD_DATE --> WRITE_B["Write → bronze/events/<br/><i>Parquet, partitioned by event_date</i>"]
+
+    WRITE_B --> SILVER_START
+
+    subgraph SILVER_LAYER ["🥈 SILVER LAYER — silver.py"]
+        SILVER_START["Read bronze/events/"] --> LOAD_USERS["load_users()<br/><i>Read users.csv<br/>Parse signup_date<br/>Fill missing country → UNKNOWN</i>"]
+        LOAD_USERS --> ENRICH["enrich_events()<br/><i>LEFT JOIN on user_id</i>"]
+        ENRICH --> DERIVE
+
+        subgraph DERIVE ["Derived Fields"]
+            IS_PURCHASE["is_purchase<br/><i>event_type == PURCHASE</i>"]
+            DAYS_SIGNUP["days_since_signup<br/><i>datediff(event_date, signup_date)</i>"]
+            FILL_COUNTRY["Fill missing country → UNKNOWN"]
+        end
+    end
+
+    DERIVE --> WRITE_S["Write → silver/events/<br/><i>Parquet, partitioned by event_date</i>"]
+
+    WRITE_S --> GOLD_START
+
+    subgraph GOLD_LAYER ["🥇 GOLD LAYER — gold.py"]
+        GOLD_START["Read silver/events/"] --> AGG["aggregate_daily_country()<br/><i>GROUP BY event_date, country</i>"]
+
+        AGG --> METRICS
+
+        subgraph METRICS ["Aggregated Metrics"]
+            M1["total_events — COUNT(*)"]
+            M2["total_value — SUM(value)"]
+            M3["total_purchases — SUM(is_purchase)"]
+            M4["unique_users — COUNT DISTINCT(user_id)"]
+        end
+    end
+
+    METRICS --> WRITE_G["Write → gold/daily_country_metrics/<br/><i>Parquet, partitioned by event_date</i>"]
+    WRITE_G --> DONE(["✅ Pipeline Complete — spark.stop()"])
+
+    style BRONZE_LAYER fill:#FFF3E0,stroke:#CD7F32,stroke-width:2px
+    style SILVER_LAYER fill:#F5F5F5,stroke:#C0C0C0,stroke-width:2px
+    style GOLD_LAYER fill:#FFFDE7,stroke:#FFD700,stroke-width:2px
+    style QUARANTINE fill:#FFEBEE,stroke:#ff6b6b
+    style CORRUPT fill:#FFEBEE,stroke:#ff6b6b
+    style WRITE_Q fill:#FFCDD2
+    style WRITE_C fill:#FFCDD2
+    style CLEAN_STEPS fill:#E8F5E9,stroke:#4CAF50
+    style DERIVE fill:#E3F2FD,stroke:#2196F3
+    style METRICS fill:#FFF9C4,stroke:#FFC107
+```
+
+### Data Quality Gate (Bronze Validation Rules)
+
+```mermaid
+flowchart LR
+    INPUT["Incoming Record"] --> C1{"event_id\nis null?"}
+    C1 -->|"Yes"| Q1["🚫 Quarantine:<br/>null_event_id"]
+    C1 -->|"No"| C2{"user_id null\nor empty?"}
+    C2 -->|"Yes"| Q2["🚫 Quarantine:<br/>null_or_empty_user_id"]
+    C2 -->|"No"| C3{"event_type valid?<br/>CLICK, VIEW, PURCHASE"}
+    C3 -->|"No"| Q3["🚫 Quarantine:<br/>invalid_event_type"]
+    C3 -->|"Yes"| C4{"event_ts\nis null?"}
+    C4 -->|"Yes"| Q4["🚫 Quarantine:<br/>null_event_ts"]
+    C4 -->|"No"| C5{"event_ts valid\ntimestamp?"}
+    C5 -->|"No"| Q5["🚫 Quarantine:<br/>invalid_event_ts"]
+    C5 -->|"Yes"| PASS["✅ Pass → Clean + Normalize"]
+
+    style Q1 fill:#FFCDD2,stroke:#f44336
+    style Q2 fill:#FFCDD2,stroke:#f44336
+    style Q3 fill:#FFCDD2,stroke:#f44336
+    style Q4 fill:#FFCDD2,stroke:#f44336
+    style Q5 fill:#FFCDD2,stroke:#f44336
+    style PASS fill:#C8E6C9,stroke:#4CAF50
+```
+
+---
+
 ## Prerequisites
 
 - **Python 3.10+** (tested with 3.10, 3.12, 3.13)
@@ -55,7 +229,37 @@ distribute/
 
 ---
 
-## Setup
+## Running with Docker
+
+### Build the image
+
+```bash
+docker build -t pyspark-pipeline .
+```
+
+### Run the pipeline
+
+```bash
+docker run --rm -v $(pwd)/output:/app/output pyspark-pipeline
+```
+
+This mounts the `output/` directory so pipeline results are available on your host machine.
+
+### Run tests
+
+```bash
+docker run --rm pyspark-pipeline python -m pytest testing/ -v
+```
+
+### Run a specific test file
+
+```bash
+docker run --rm pyspark-pipeline python -m pytest testing/test_bronze.py -v
+```
+
+---
+
+## Setup (without Docker)
 
 ### 1. Create virtual environment and install dependencies
 
