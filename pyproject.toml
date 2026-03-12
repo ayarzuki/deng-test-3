@@ -1,0 +1,17 @@
+[project]
+name = "project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyspark>=3.5.0",
+    "pyyaml>=6.0.3",
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools]
+packages = ["job"]
+
+[tool.pytest.ini_options]
+testpaths = ["testing"]
